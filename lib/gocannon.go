@@ -1,10 +1,14 @@
 package lib
 
 import (
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
+
+	"github.com/valyala/fasthttp"
 
 	"github.com/kffl/gocannon/common"
-	"github.com/valyala/fasthttp"
 )
 
 // Gocannon represents a single gocannon instance with a config defined upon its creation.
@@ -52,6 +56,9 @@ func NewGocannon(cfg common.Config) (Gocannon, error) {
 // Run performs the load test.
 func (g Gocannon) Run() (TestResults, error) {
 
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT) // ctrl-c ctrl-d ctrl-\
+
 	n := *g.cfg.Connections
 
 	var wg sync.WaitGroup
@@ -61,9 +68,21 @@ func (g Gocannon) Run() (TestResults, error) {
 	start := makeTimestamp()
 	stop := start + g.cfg.Duration.Nanoseconds()
 
+	chclose := make(chan int)
+	go func() {
+		<-ch
+		close(chclose)
+	}()
+
 	for connectionID := 0; connectionID < n; connectionID++ {
 		go func(c *fasthttp.HostClient, cid int, p common.GocannonPlugin) {
 			for {
+				select {
+				case <-chclose:
+					goto END
+				default:
+				}
+
 				var code int
 				var start int64
 				var end int64
@@ -85,6 +104,7 @@ func (g Gocannon) Run() (TestResults, error) {
 
 				g.stats.RecordResponse(cid, code, start, end)
 			}
+		END:
 			wg.Done()
 		}(g.client, connectionID, g.plugin)
 	}
@@ -92,7 +112,6 @@ func (g Gocannon) Run() (TestResults, error) {
 	wg.Wait()
 
 	err := g.stats.CalculateStats(start, stop, *g.cfg.Interval, *g.cfg.OutputFile)
-
 	if err != nil {
 		return nil, err
 	}
