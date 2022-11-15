@@ -71,6 +71,8 @@ func (g Gocannon) Run() (TestResults, error) {
 	chclose := make(chan int)
 	go func() {
 		<-ch
+		// 更新下stop，不然影响后面的结果统计(不然qps的计算还是按照之前的参数算的，肯定不对啊)
+		stop = start + g.cfg.Duration.Nanoseconds()
 		close(chclose)
 	}()
 
